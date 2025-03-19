@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #define MAX_DATA_LENGTH 16
 #define STOP_CHAR '\0'
@@ -70,7 +73,6 @@ int recv_frame(char* buf) {
         return 5;
     }
 
-    printf("%c\n", buf[5 + data_len]);
     char* data = malloc(data_len + 1);
     memcpy(data, &buf[5], data_len);
     data[data_len] = 0;
@@ -82,18 +84,18 @@ int recv_frame(char* buf) {
     return 0;
 }
 
-int send_frame(uint8_t address, char action, uint8_t reg, char* data) {
+int make_frame(uint8_t address, char action, uint8_t reg, char* data, char* buf) {
     size_t data_len = strlen(data);
     if (data_len > MAX_DATA_LENGTH) {
         printf("Data too long: %ld\n", data_len);
         return 1;
     }
 
-    char* buf = malloc(data_len + 8);
+//    char* buf = malloc(data_len + 8);
 
     if (address > 0xf) {
         printf("Invalid address %x\n", address);
-        free(buf);
+//        free(buf);
         return 2;
     }
 
@@ -108,12 +110,81 @@ int send_frame(uint8_t address, char action, uint8_t reg, char* data) {
 
     buf[data_len + 7] = STOP_CHAR;
 
-    printf("%s\n", buf);
-    free(buf);
+//    free(buf);
     return 0;
 }
 
+void flush();
+
 int main() {
-    send_frame(1, 'W', 2, "hello!!");
-    recv_frame(":01W2hello!!40\0");
+	int error;
+
+	char address_input;
+	printf("Address (1-f): ");
+	address_input = getchar();
+	flush();
+	uint8_t address = hex_char_to_uint8(address_input);
+	if (address == 255 || address == 0) {
+		puts("Invalid address number");
+		exit(-1);
+	}
+
+	char command_input;
+	printf("Command (W/R/N): ");
+	command_input = getchar();
+	if (command_input != 'W' && command_input != 'R' && command_input != 'N') {
+		puts("Invalid command");
+		exit(-1);
+	}
+	flush();
+
+	char register_input;
+	printf("Register (0-f): ");
+	register_input = getchar();
+	flush();
+	uint8_t reg = hex_char_to_uint8(register_input);
+	if (address == 255) {
+		puts("Invalid register number!");
+		exit(-1);
+	}
+
+	char data_input[17];
+	printf("Data (max length 16): ");
+	scanf("%s", data_input);
+	printf("%s\n", data_input);
+
+	char frame_buffer[25];
+	// canary just in case
+	frame_buffer[24] = 'z';
+
+	error = make_frame(address, command_input, reg, data_input, frame_buffer);
+    if (error) {
+    	exit(error);
+    }
+    printf("%s\n", frame_buffer);
+
+
+    // sending frame over serial
+    int serial = open("/dev/ttyS1", O_RDWR);
+    if (serial < 0) {
+    	puts("Error opening serial port");
+    	exit(-2);
+    }
+    write(serial, frame_buffer, strlen(frame_buffer));
+
+
+    error = recv_frame(frame_buffer);
+    if (error) {
+    	exit(error);
+    }
+
+
+    if (frame_buffer[24] != 'z') {
+    	printf("buffer corrupted, canary dead, should be 'z' now is: '%c'\n", frame_buffer[24]);
+    }
+}
+void flush() {
+	int c;
+	while ((c = getchar()) != '\n' && c != EOF)
+		;
 }
