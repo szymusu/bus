@@ -7,16 +7,15 @@
 #include <fcntl.h>
 
 #define MAX_DATA_LENGTH 16
-#define STOP_CHAR '\0'
+#define STOP_CHAR '\n'
 
 typedef struct {
-    char start;
-    char address[2];
-    char command[2];
-    char data[16];
-    char checksum[2];
-    char end;
-} Frame;
+	uint8_t address;
+    char command_type;
+    uint8_t reg;
+    char data[17];
+    uint8_t checksum;
+} FrameData;
 
 // range 0-15, 255 on invalid hex digit
 uint8_t hex_char_to_uint8(char c) {
@@ -29,27 +28,37 @@ uint8_t hex_char_to_uint8(char c) {
     return 255;
 }
 
-int recv_frame(char* buf) {
+char uint8_to_hex_char(uint8_t n) {
+	if (n < 10) {
+		return n + '0';
+	}
+	if (n < 16) {
+		return n + 'a';
+	}
+	return '-';
+}
+
+int recv_frame(char* buf, FrameData* frame_data) {
     if (buf[0] != ':') {
         printf("Invalid start character: %c\n", buf[0]);
         return 1;
     }
     // buf[1] ignored, always '0'
-    uint8_t address = hex_char_to_uint8(buf[2]);
-    if (address == 255) {
+    frame_data->address = hex_char_to_uint8(buf[2]);
+    if (frame_data->address == 255) {
         printf("Invalid address character: %c\n", buf[2]);
         return 2;
     }
 
-    char command_type = buf[3];
-    uint8_t command_target = hex_char_to_uint8(buf[4]);
+    frame_data->command_type = buf[3];
+    frame_data->reg = hex_char_to_uint8(buf[4]);
 
-    if (command_type != 'W' && command_type != 'R' && command_type != 'N') {
-        printf("Invalid command type: %c\n", command_type);
+    if (frame_data->command_type != 'W' && frame_data->command_type != 'R' && frame_data->command_type != 'N') {
+        printf("Invalid command type: %c\n", frame_data->command_type);
         return 3;
     }
 
-    uint8_t computed_checksum = buf[1] + buf[2] + buf[3] + buf[4];
+    uint8_t computed_checksum = buf[0] + buf[1] + buf[2] + buf[3] + buf[4];
     uint8_t data_i = 0;
     while (1) {
         if (buf[5 + data_i] == STOP_CHAR) {
@@ -72,15 +81,18 @@ int recv_frame(char* buf) {
         printf("Invalid checksum. read: %x, computed: %x\n", read_checksum, computed_checksum);
         return 5;
     }
+    frame_data->checksum = read_checksum;
 
-    char* data = malloc(data_len + 1);
-    memcpy(data, &buf[5], data_len);
-    data[data_len] = 0;
+//    char* data = malloc(data_len + 1);
+    memcpy(frame_data->data, &buf[5], data_len);
+    frame_data->data[data_len] = 0;
 
-    printf("Address: %x, Command: %c, Register: %x, Data length: %d, Checksum: read %x computed %x\n",
-        address, command_type, command_target, data_len, read_checksum, computed_checksum);
-    printf("Data: %s\n", data);
-    free(data);
+    printf("Received frame\nAddress: %x, Command: %c, Register: %x, Data length: %d, Checksum: read %x computed %x\n",
+        frame_data->address, frame_data->command_type, frame_data->reg, data_len, read_checksum, computed_checksum);
+    printf("Data: %s\n", frame_data->data);
+
+
+//    free(data);
     return 0;
 }
 
@@ -101,14 +113,17 @@ int make_frame(uint8_t address, char action, uint8_t reg, char* data, char* buf)
 
     sprintf(buf, ":0%x%c%x%s", address, action, reg, data);
 
-    uint8_t checksum = 0;
+    uint8_t checksum = buf[0];
     for (int i = 1; i < data_len + 5; ++i) {
         checksum += buf[i];
     }
 
     sprintf(&buf[data_len + 5], "%02x", checksum);
+//    buf[data_len + 5] = '0';
+//    buf[data_len + 6] = uint8_to_hex_char();
 
     buf[data_len + 7] = STOP_CHAR;
+    buf[data_len + 8] = '\0';
 
 //    free(buf);
     return 0;
@@ -149,19 +164,25 @@ int main() {
 	}
 
 	char data_input[17];
-	printf("Data (max length 16): ");
-	scanf("%s", data_input);
-	printf("%s\n", data_input);
+	if (command_input == 'W') {
+		printf("Data (max length 16): ");
+		scanf("%s", data_input);
+		printf("%s\n", data_input);
+	}
+	else {
+		data_input[0] = 0;
+	}
 
-	char frame_buffer[25];
+
+	char frame_buffer[26];
 	// canary just in case
-	frame_buffer[24] = 'z';
+	frame_buffer[25] = 'z';
 
 	error = make_frame(address, command_input, reg, data_input, frame_buffer);
     if (error) {
     	exit(error);
     }
-    printf("%s\n", frame_buffer);
+    printf("%s", frame_buffer);
 
 
     // sending frame over serial
@@ -173,16 +194,30 @@ int main() {
     write(serial, frame_buffer, strlen(frame_buffer));
 
 
-    error = recv_frame(frame_buffer);
+    FrameData frame_data;
+    error = recv_frame(frame_buffer, &frame_data);
     if (error) {
     	exit(error);
     }
 
+    if (frame_data.command_type == 'W') {
+    	printf("Write %s to register %x\nResponse: %s", frame_data.data, frame_data.reg, frame_buffer);
+    }
 
-    if (frame_buffer[24] != 'z') {
-    	printf("buffer corrupted, canary dead, should be 'z' now is: '%c'\n", frame_buffer[24]);
+    if (frame_data.command_type == 'R') {
+    	printf("Read %s from register %x\n", frame_data.data, frame_data.reg);
+    }
+
+    if (frame_data.command_type == 'N') {
+    	printf("Received CRC error frame\n");
+    }
+
+
+    if (frame_buffer[25] != 'z') {
+    	printf("buffer corrupted, canary dead, should be 'z' now is: '%c'\n", frame_buffer[25]);
     }
 }
+
 void flush() {
 	int c;
 	while ((c = getchar()) != '\n' && c != EOF)
