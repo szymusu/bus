@@ -10,6 +10,12 @@
 #define STOP_CHAR '\n'
 
 typedef struct {
+	float floats[6];
+	char strings[5][17];
+	uint8_t bytes[5];
+} Registers;
+
+typedef struct {
 	uint8_t address;
     char command_type;
     uint8_t reg;
@@ -83,7 +89,6 @@ int recv_frame(char* buf, FrameData* frame_data) {
     }
     frame_data->checksum = read_checksum;
 
-//    char* data = malloc(data_len + 1);
     memcpy(frame_data->data, &buf[5], data_len);
     frame_data->data[data_len] = 0;
 
@@ -91,8 +96,6 @@ int recv_frame(char* buf, FrameData* frame_data) {
         frame_data->address, frame_data->command_type, frame_data->reg, data_len, read_checksum, computed_checksum);
     printf("Data: %s\n", frame_data->data);
 
-
-//    free(data);
     return 0;
 }
 
@@ -120,7 +123,7 @@ int make_frame(uint8_t address, char action, uint8_t reg, char* data, char* buf)
 
     sprintf(&buf[data_len + 5], "%02x", checksum);
 //    buf[data_len + 5] = '0';
-//    buf[data_len + 6] = uint8_to_hex_char();
+//    buf[data_len + 6] = uint8_to_hex_char( );
 
     buf[data_len + 7] = STOP_CHAR;
     buf[data_len + 8] = '\0';
@@ -129,9 +132,93 @@ int make_frame(uint8_t address, char action, uint8_t reg, char* data, char* buf)
     return 0;
 }
 
+void print_regs(Registers* registers) {
+	printf("Float registers:\n");
+	for (int i = 0; i <= 0x5; ++i) {
+		printf("%x: %f\n", i, registers->floats[i]);
+	}
+	printf("String registers:\n");
+	for (int i = 0x6; i <= 0xa; ++i) {
+		printf("%x: %s\n", i, registers->strings[i - 6]);
+	}
+	printf("Byte registers:\n");
+	for (int i = 0xb; i <= 0xf; ++i) {
+		printf("%x: %x\n", i, registers->bytes[i - 0xb]);
+	}
+}
+
+void write_register(Registers* registers, char* data, uint8_t reg) {
+	if (reg >= 0 && reg <= 5) {
+		// write float
+		registers->floats[reg] = atof(data);
+	}
+	else if (reg >= 6 && reg <= 0xa) {
+		// write string
+		strcpy(registers->strings[reg - 6], data);
+	}
+	else if (reg >= 0xb && reg <= 0xf) {
+		// write byte
+		uint8_t high = hex_char_to_uint8(data[0]);
+		uint8_t low = hex_char_to_uint8(data[1]);
+		registers->floats[reg] = high * 16 + low;
+	}
+	else {
+		printf("Invalid register number: %x\n", reg);
+	}
+}
+
+int execute_command(FrameData* frame_data) {
+	if (frame_data->command_type == 'W') {
+		printf("Write %s to register %x\n", frame_data->data, frame_data->reg);
+	}
+
+	else if (frame_data->command_type == 'R') {
+		printf("Read %s from register %x\n", frame_data->data, frame_data->reg);
+	}
+
+	else if (frame_data->command_type == 'N') {
+		printf("Received CRC error frame\n");
+	}
+	else {
+		printf("Invalid command type %c\n", frame_data->command_type);
+		return 1;
+	}
+	return 0;
+}
+
 void flush();
 
 int main() {
+	int serial = open("/dev/ttyS1", O_RDWR);
+	if (serial < 0) {
+		puts("Error opening serial port");
+		exit(-2);
+	}
+
+	char frame_buffer[26];
+	// canary just in case
+	frame_buffer[25] = 'z';
+
+	FrameData frame_data;
+	read(serial, frame_buffer, 24);
+	printf("%s", frame_buffer);
+	recv_frame(frame_buffer, &frame_data);
+	execute_command(&frame_data);
+	return 0;
+
+	Registers registers = { 0 };
+
+	strcpy(registers.strings[0], "siema jeden");
+	strcpy(registers.strings[1], "siema dwa");
+	registers.floats[0] = 3.141592653589793238462643383279f;
+	registers.bytes[4] = 0xaa;
+
+	write_register(&registers, "1.21", 1);
+	write_register(&registers, "siema", 8);
+	write_register(&registers, "f1", 0xb);
+	print_regs(&registers);
+
+	return 0;
 	int error;
 
 	char address_input;
@@ -174,10 +261,6 @@ int main() {
 	}
 
 
-	char frame_buffer[26];
-	// canary just in case
-	frame_buffer[25] = 'z';
-
 	error = make_frame(address, command_input, reg, data_input, frame_buffer);
     if (error) {
     	exit(error);
@@ -186,32 +269,17 @@ int main() {
 
 
     // sending frame over serial
-    int serial = open("/dev/ttyS1", O_RDWR);
-    if (serial < 0) {
-    	puts("Error opening serial port");
-    	exit(-2);
-    }
+
     write(serial, frame_buffer, strlen(frame_buffer));
 
 
-    FrameData frame_data;
+//    FrameData frame_data;
     error = recv_frame(frame_buffer, &frame_data);
     if (error) {
     	exit(error);
     }
 
-    if (frame_data.command_type == 'W') {
-    	printf("Write %s to register %x\nResponse: %s", frame_data.data, frame_data.reg, frame_buffer);
-    }
-
-    if (frame_data.command_type == 'R') {
-    	printf("Read %s from register %x\n", frame_data.data, frame_data.reg);
-    }
-
-    if (frame_data.command_type == 'N') {
-    	printf("Received CRC error frame\n");
-    }
-
+    execute_command(&frame_data);
 
     if (frame_buffer[25] != 'z') {
     	printf("buffer corrupted, canary dead, should be 'z' now is: '%c'\n", frame_buffer[25]);
