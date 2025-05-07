@@ -9,11 +9,16 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <arpa/inet.h>
 //#include <unix.h>
 
 #define MYPORT 8080
 #define BACKLOG 1
 #define BUFF_SIZE 1024
+
+char data[BUFF_SIZE];
+
+int process_request(char*, char*, int);
 
 int main(int argc, char** argv) {
 	short myport;
@@ -22,8 +27,6 @@ int main(int argc, char** argv) {
 	struct sockaddr_in my_addr;
 	struct sockaddr_in their_addr;
 	int sin_size;
-	int out_size;
-	int recv_data;
 	char send_buf[BUFF_SIZE];
 	char recv_buf[BUFF_SIZE];
 
@@ -73,7 +76,8 @@ int main(int argc, char** argv) {
 			}
 			if (sin_size != -1) {
 				printf( "Recv = %d %s\n", sin_size, recv_buf );
-				if( send( new_fd, &send_buf, sin_size, 0 )<0 ) { // odeślij dane
+				int send_size = process_request(recv_buf, send_buf, sin_size);
+				if( send( new_fd, &send_buf, send_size, 0 ) < 0 ) { // odeślij dane
 					perror( "Sending data" );
 					break;
 				}
@@ -83,4 +87,12 @@ int main(int argc, char** argv) {
 	}
 	shutdown(sockfd, 2);
 	exit(0);
+}
+
+int process_request(char* recv_buf, char* send_buf, int sin_size) {
+	memcpy(data, recv_buf, sin_size);
+	send_buf[0] = 'O';
+	send_buf[1] = 'K';
+	//sprintf(send_buf, "OK - %d bytes\0", sin_size);
+	return 2; // strlen(send_buf);
 }
