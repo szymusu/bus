@@ -17,6 +17,7 @@
 #define BUFF_SIZE 1024
 
 char data[BUFF_SIZE];
+int data_size;
 
 int process_request(char*, char*, int);
 
@@ -69,6 +70,7 @@ int main(int argc, char** argv) {
 
 		for( ;; ) {
 			sin_size = recv(new_fd, &recv_buf, sizeof(recv_buf), 0); // odbierz dane
+			recv_buf[sin_size] = '\0';
 
 			if (sin_size == 0) {
 				printf( "Disconnected\n" );
@@ -77,10 +79,12 @@ int main(int argc, char** argv) {
 			if (sin_size != -1) {
 				printf( "Recv = %d %s\n", sin_size, recv_buf );
 				int send_size = process_request(recv_buf, send_buf, sin_size);
+				printf("send size: %d\n", send_size);
 				if( send( new_fd, &send_buf, send_size, 0 ) < 0 ) { // odeślij dane
 					perror( "Sending data" );
 					break;
 				}
+				break;
 			}
 		}
 		close(new_fd);
@@ -90,7 +94,17 @@ int main(int argc, char** argv) {
 }
 
 int process_request(char* recv_buf, char* send_buf, int sin_size) {
+	// client is requesting data
+	if (sin_size == 1 && recv_buf[0] == '-') {
+		memcpy(send_buf, data, data_size);
+		printf("data jego mac: %d\n %s\n", data_size, data);
+		return data_size;
+	}
+	// client is sending data
 	memcpy(data, recv_buf, sin_size);
+	printf("data saved: length: %d data: %s chuj", strlen(data), data);
+	puts("e");
+	data_size = sin_size;
 	send_buf[0] = 'O';
 	send_buf[1] = 'K';
 	//sprintf(send_buf, "OK - %d bytes\0", sin_size);
