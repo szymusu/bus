@@ -17,14 +17,14 @@
 #define BUFF_SIZE 1024
 
 char data[BUFF_SIZE];
-int data_size;
+ssize_t data_size;
 
-int process_request(char*, char*, int);
+ssize_t process_request(char*, char*, ssize_t);
 
 int main(int argc, char** argv) {
 	short myport;
-	int sockfd;
-	int new_fd;
+	int my_socket;
+	int incoming_socket;
 	struct sockaddr_in my_addr;
 	struct sockaddr_in their_addr;
 	int sin_size;
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 	}
 	signal( SIGCHLD, SIG_IGN );
 	// utwórz gniazdo
-	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+	if ((my_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
 		perror("socket");
 		exit(1);
 	}
@@ -49,64 +49,72 @@ int main(int argc, char** argv) {
 	my_addr.sin_port = htons( myport );
 	my_addr.sin_addr.s_addr = INADDR_ANY;
 	bzero(&(my_addr.sin_zero), 8);
-	if (bind(sockfd, (struct sockaddr *) &my_addr, sizeof(struct sockaddr))== -1) {
+	if (bind(my_socket, (struct sockaddr *) &my_addr, sizeof(struct sockaddr))== -1) {
 		perror("bind");
 		exit(1);
 	}
 	// czekaj na połączenie
-	if (listen( sockfd, BACKLOG) == -1) {
+	if (listen( my_socket, BACKLOG) == -1) {
 		perror("listen");
 		exit(1);
 	}
 	// odbierz połączenie
 	while(1) {
 		sin_size = sizeof(struct sockaddr_in);
-		new_fd = accept(sockfd, (struct sockaddr *) &their_addr, &sin_size);
-		if(new_fd == -1) {
+		incoming_socket = accept(my_socket, (struct sockaddr *) &their_addr, &sin_size);
+		if(incoming_socket == -1) {
 			perror("accept");
 			continue;
 		}
 		printf("server: got connection from %s\n", inet_ntoa(their_addr.sin_addr));
 
-		for( ;; ) {
-			sin_size = recv(new_fd, &recv_buf, sizeof(recv_buf), 0); // odbierz dane
+		while(1) {
+			sin_size = recv(incoming_socket, &recv_buf, sizeof(recv_buf), 0); // odbierz dane
 			recv_buf[sin_size] = '\0';
 
 			if (sin_size == 0) {
-				printf( "Disconnected\n" );
+				printf("Disconnected\n");
 				break;
 			}
 			if (sin_size != -1) {
-				printf( "Recv = %d %s\n", sin_size, recv_buf );
-				int send_size = process_request(recv_buf, send_buf, sin_size);
-				printf("send size: %d\n", send_size);
-				if( send( new_fd, &send_buf, send_size, 0 ) < 0 ) { // odeślij dane
+				ssize_t send_size = process_request(recv_buf, send_buf, sin_size);
+
+				printf("send size: %ld\n", send_size);
+				send_buf[send_size] = 0;
+				ssize_t bytes_sent = send(incoming_socket, send_buf, send_size, 0);
+				if( bytes_sent < 0 ) { // odeślij dane
 					perror( "Sending data" );
 					break;
 				}
+				printf("Successfully sent %ld bytes\n", bytes_sent);
 				break;
 			}
 		}
-		close(new_fd);
+		close(incoming_socket);
 	}
-	shutdown(sockfd, 2);
+	shutdown(my_socket, 2);
 	exit(0);
 }
 
-int process_request(char* recv_buf, char* send_buf, int sin_size) {
+ssize_t process_request(char* recv_buf, char* send_buf, ssize_t sin_size) {
 	// client is requesting data
 	if (sin_size == 1 && recv_buf[0] == '-') {
 		memcpy(send_buf, data, data_size);
-		printf("data jego mac: %d\n %s\n", data_size, data);
+		puts("Got request to send data");
+		printf("size: %ld\n", data_size);
+		printf("data: %s\n", data);
+		printf("send buffer: %s\n", send_buf);
 		return data_size;
 	}
 	// client is sending data
+	printf("Received data: %s\n", recv_buf);
+	printf("Size: %ld\n", sin_size);
 	memcpy(data, recv_buf, sin_size);
-	printf("data saved: length: %d data: %s chuj", strlen(data), data);
-	puts("e");
+	data[sin_size] = 0;
+	printf("Saved data: %s\n", data);
+	printf("Strlen: %ld\n", strlen(data));
 	data_size = sin_size;
 	send_buf[0] = 'O';
 	send_buf[1] = 'K';
-	//sprintf(send_buf, "OK - %d bytes\0", sin_size);
-	return 2; // strlen(send_buf);
+	return 2;
 }
